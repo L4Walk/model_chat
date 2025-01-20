@@ -134,11 +134,7 @@ def verify_email(token):
 
 @app.route('/chat', methods=['GET', 'POST'])
 @login_required
-def chat():
-    if current_user.role != 'superadmin':
-        flash('权限不足')
-        return redirect(url_for('dashboard'))
-    
+def chat():    
     # 获取当前对话ID
     chat_id = request.args.get('chat_id')
     
@@ -157,22 +153,61 @@ def chat():
         ]
     
     return render_template('chat.html', 
-                            chat_history=chat_history,
-                            current_chat_id=chat_id,
-                            messages=messages)
-    if request.method == 'POST':
-        user_message = request.form.get('message')
-        if user_message:
-            messages.append({'role': 'user', 'content': user_message})
-            # TODO: 调用模型生成回复
-            messages.append({'role': 'assistant', 'content': '这是一个示例回复'})
-    
-    return render_template('chat.html', messages=messages)
+                         chat_history=chat_history,
+                         current_chat_id=chat_id,
+                         messages=messages)
 
-
-
-
-
+@app.route('/chat/stream', methods=['POST'])
+@login_required
+def chat_stream():    
+    data = request.get_json()
+    if not data or 'message' not in data:
+        return jsonify({'error': '无效的请求数据'}), 400
+        
+    try:
+        # 获取当前激活的模型配置
+        model_config = ModelConfig.query.filter_by(status='active').first()
+        if not model_config:
+            return jsonify({'error': '未找到可用的模型配置'}), 400
+            
+        # 获取历史消息
+        chat_id = data.get('chat_id')
+        history_messages = []
+        if chat_id:
+            # TODO: 从数据库获取历史消息
+            pass
+            
+        # 构建完整的消息列表
+        messages = history_messages + [
+            {"role": "user", "content": data['message']}
+        ]
+        
+        def generate():
+            try:
+                # 调用模型服务获取流式响应
+                from utils.model_service import get_chat_response
+                for chunk in get_chat_response(model_config, messages):
+                    if chunk.strip():  # 只输出非空内容
+                        time.sleep(0.05)  # 添加50毫秒的延迟
+                        yield f'{chunk}'
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.error(f"生成回复失败: {str(e)}")
+                yield f'[ERROR] {str(e)}'
+        
+        return Response(
+            generate(),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no'
+            }
+        )
+        
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"生成回复失败: {str(e)}")
+        return jsonify({'error': f'生成回复失败：{str(e)}'}), 500
 
 
 @app.route('/user_management')
@@ -194,42 +229,112 @@ def add_model_config():
         return redirect(url_for('dashboard'))
     
     name = request.form.get('name')
-    api_url = request.form.get('api_url')
-    api_key = request.form.get('api_key')
     model_type = request.form.get('model_type')
+    api_key = request.form.get('api_key')
+    api_base = request.form.get('api_base')
+    model_name = request.form.get('model_name')
+    parameters = request.form.get('parameters')
     
-    if not all([name, api_url, api_key, model_type]):
+    if not all([name, model_type, api_key, model_name]):
         flash('请填写所有必填字段')
         return redirect(url_for('model_config'))
     
-    model_config = ModelConfig(name=name, api_url=api_url, api_key=api_key, model_type=model_type)
-    db.session.add(model_config)
-    db.session.commit()
+    # 验证参数JSON格式
+    if parameters:
+        try:
+            parameters = json.loads(parameters)
+        except json.JSONDecodeError:
+            flash('参数配置必须是有效的JSON格式')
+            return redirect(url_for('model_config'))
     
-    flash('模型配置添加成功')
+    try:
+        model_config = ModelConfig(
+            name=name,
+            model_type=model_type,
+            api_key=api_key,
+            model_name=model_name,
+            api_base=api_base,
+            parameters=parameters
+        )
+        db.session.add(model_config)
+        db.session.commit()
+        flash('模型配置添加成功')
+    except Exception as e:
+        db.session.rollback()
+        flash('保存模型配置失败：' + str(e))
+    
     return redirect(url_for('model_config'))
 
-@app.route('/chat/stream', methods=['POST'])
+@app.route('/edit_model_config/<int:config_id>', methods=['GET', 'POST'])
 @login_required
-def chat_stream():
-    if current_user.role != 'superadmin':
+def edit_model_config(config_id):
+    if current_user.role not in ['admin', 'superadmin']:
+        flash('权限不足')
+        return redirect(url_for('dashboard'))
+    
+    model_config = ModelConfig.query.get_or_404(config_id)
+    
+    if request.method == 'POST':
+        name = request.form.get('name')
+        model_type = request.form.get('model_type')
+        api_key = request.form.get('api_key')
+        api_base = request.form.get('api_base')
+        model_name = request.form.get('model_name')
+        parameters = request.form.get('parameters')
+        
+        if not all([name, model_type, model_name]):
+            flash('请填写所有必填字段')
+            return redirect(url_for('model_config'))
+        
+        # 验证参数JSON格式
+        if parameters:
+            try:
+                parameters = json.loads(parameters)
+            except json.JSONDecodeError:
+                flash('参数配置必须是有效的JSON格式')
+                return redirect(url_for('model_config'))
+        
+        try:
+            model_config.name = name
+            model_config.model_type = model_type
+            if api_key:  # 只在提供新API密钥时更新
+                model_config.api_key = model_config._encrypt_api_key(api_key)
+            model_config.model_name = model_name
+            model_config.api_base = api_base
+            model_config.parameters = json.dumps(parameters) if parameters else None
+            
+            db.session.commit()
+            flash('模型配置更新成功')
+        except Exception as e:
+            db.session.rollback()
+            flash('更新模型配置失败：' + str(e))
+        
+        return redirect(url_for('model_config'))
+    
+    return jsonify({
+        'id': model_config.id,
+        'name': model_config.name,
+        'model_type': model_config.model_type,
+        'api_base': model_config.api_base,
+        'model_name': model_config.model_name,
+        'parameters': model_config.parameters
+    })
+
+@app.route('/delete_model_config/<int:config_id>', methods=['POST'])
+@login_required
+def delete_model_config(config_id):
+    if current_user.role not in ['admin', 'superadmin']:
         return jsonify({'error': '权限不足'}), 403
     
-    data = request.get_json()
-    if not data or 'message' not in data:
-        return jsonify({'error': '无效的请求数据'}), 400
-        
-    def generate():
-        # 模拟流式输出
-        response = "你好！我是AU大模型助手。我会一个字一个字地回复你的消息。\n让我们来测试一下流式输出功能。"
-        for char in response:
-            yield char
-            time.sleep(0.05)  # 模拟打字效果
+    model_config = ModelConfig.query.get_or_404(config_id)
     
-    return Response(generate(), mimetype='text/plain')
-
-
-
+    try:
+        db.session.delete(model_config)
+        db.session.commit()
+        return jsonify({'message': '删除成功'})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'删除失败：{str(e)}'}), 500
 
 
 
@@ -243,6 +348,10 @@ def init_db():
             superadmin.set_password('root123')
             db.session.add(superadmin)
             db.session.commit()
+        
+        # Initialize default Azure model
+        from utils.model_service import init_default_model
+        init_default_model()
 
 if __name__ == '__main__':
     init_db()
