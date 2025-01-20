@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>对话 - AU大模型平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body class="bg-gray-100">
+    <nav class="fixed w-full top-0 z-50 bg-white shadow-md">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <span class="text-2xl font-bold text-gray-800 tracking-tight hover:text-blue-600 transition-colors duration-200">AU大模型平台</span>
+                </div>
+                <div class="flex items-center space-x-6">
+                    <a href="{{ url_for('dashboard') }}" class="text-gray-600 hover:text-blue-600 font-medium transition-colors duration-200 px-4 py-2 rounded-lg hover:bg-gray-100">返回仪表盘</a>
+                    <a href="{{ url_for('logout') }}" class="text-gray-600 hover:text-blue-600 font-medium transition-colors duration-200 px-4 py-2 rounded-lg hover:bg-gray-100">退出登录</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <div class="flex h-[calc(100vh-4rem)] mt-16">
+        <!-- 历史对话列表 -->
+        <div class="w-64 bg-white border-r overflow-y-auto">
+            <div class="p-4">
+                <button onclick="newChat()" class="w-full flex items-center justify-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    <span>新建对话</span>
+                </button>
+            </div>
+            <div class="space-y-2 p-2">
+                {% for chat in chat_history %}
+                <a href="{{ url_for('chat', chat_id=chat.id) }}" class="block p-3 rounded-lg hover:bg-gray-100 {% if chat.id == current_chat_id %}bg-gray-100{% endif %}">
+                    <div class="font-medium text-gray-900 truncate">{{ chat.title }}</div>
+                    <div class="text-sm text-gray-500">{{ chat.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+        <!-- 对话内容 -->
+        <div class="flex-1 flex flex-col bg-white">
+            <div class="flex-1 overflow-y-auto p-4" id="chat-messages">
+                {% for message in messages %}
+                <div class="mb-4 {% if message.role == 'user' %}text-right{% endif %}">
+                    <div class="inline-block max-w-[70%] p-3 rounded-lg {% if message.role == 'user' %}bg-blue-100{% else %}bg-gray-100{% endif %}">
+                        <div class="prose max-w-none">{{ message.content | safe }}</div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="border-t p-4">
+                <form id="chat-form" class="flex space-x-4">
+                    <input type="text" id="message-input" class="flex-1 rounded-lg border-gray-300 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50" placeholder="输入您的问题..." required>
+                    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">发送</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatMessages = document.getElementById('chat-messages');
+        const chatForm = document.getElementById('chat-form');
+        const messageInput = document.getElementById('message-input');
+
+        // 自动滚动到底部
+        function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // 添加消息到界面
+        function appendMessage(content, isUser = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `mb-4 ${isUser ? 'text-right' : ''}`;
+            messageDiv.innerHTML = `
+                <div class="inline-block max-w-[70%] p-3 rounded-lg ${isUser ? 'bg-blue-100' : 'bg-gray-100'}">
+                    <div class="prose max-w-none">${marked.parse(content)}</div>
+                </div>
+            `;
+            chatMessages.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        // 处理表单提交
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            // 显示用户消息
+            appendMessage(message, true);
+            messageInput.value = '';
+
+            try {
+                const response = await fetch('/chat/stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message }),
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let aiMessage = '';
+                let aiMessageDiv = null;
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    
+                    const text = decoder.decode(value);
+                    aiMessage += text;
+
+                    if (!aiMessageDiv) {
+                        aiMessageDiv = document.createElement('div');
+                        aiMessageDiv.className = 'mb-4';
+                        aiMessageDiv.innerHTML = `
+                            <div class="inline-block max-w-[70%] p-3 rounded-lg bg-gray-100">
+                                <div class="prose max-w-none">${marked.parse(aiMessage)}</div>
+                            </div>
+                        `;
+                        chatMessages.appendChild(aiMessageDiv);
+                    } else {
+                        aiMessageDiv.querySelector('.prose').innerHTML = marked.parse(aiMessage);
+                    }
+                    scrollToBottom();
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                appendMessage('抱歉，发生了错误，请稍后重试。');
+            }
+        });
+
+        // 新建对话
+        function newChat() {
+            window.location.href = '{{ url_for("chat", new=1) }}';
+        }
+
+        // 页面加载完成后滚动到底部
+        scrollToBottom();
+    </script>
+</body>
+</html>
