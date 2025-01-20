@@ -5,6 +5,61 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>模型配置 - AU大模型平台</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 模拟最近7天的数据
+            const dates = Array.from({length: 7}, (_, i) => {
+                const date = new Date();
+                date.setDate(date.getDate() - (6 - i));
+                return date.toLocaleDateString('zh-CN', {month: '2-digit', day: '2-digit'});
+            });
+            const mockData = Array.from({length: 7}, () => Math.floor(Math.random() * 100));
+
+            const ctx = document.getElementById('usageChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [{
+                        label: '日调用量',
+                        data: mockData,
+                        borderColor: 'rgb(59, 130, 246)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        title: {
+                            display: true,
+                            text: '最近7天调用量统计'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: '调用次数'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: '日期'
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    </script>
 </head>
 <body class="bg-gray-100">
     <nav class="fixed w-full top-0 z-50 bg-white shadow-md">
@@ -114,6 +169,9 @@
         <!-- 用量统计 -->
         <div>
             <h2 class="text-2xl font-bold text-gray-800 mb-4">用量统计</h2>
+            <div class="bg-white shadow rounded-lg p-6 mb-6">
+                <canvas id="usageChart"></canvas>
+            </div>
             <div class="bg-white shadow overflow-hidden sm:rounded-lg">
                 <div class="px-4 py-5 sm:p-6">
                     <dl class="grid grid-cols-1 gap-5 sm:grid-cols-3">
